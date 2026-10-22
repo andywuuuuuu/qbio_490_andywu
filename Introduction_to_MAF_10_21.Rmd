@@ -1,0 +1,251 @@
+---
+title: "Introduction to MAF"
+author: Joshua Lin, Christopher Kim, Erika Li, Jeanne Revilla, Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/12/2026
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *If you do work with a partner, at the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+#Used Claude to fix errors
+
+knitr::opts_knit$set(root.dir = normalizePath("/home1/andyzwu/490_cluster/analysis_data"))
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+clin_query <- GDCquery(project = "TCGA-BRCA", data.category = "Clinical",
+data.type = "Clinical Supplement", data.format = 'BCR Biotab')
+
+GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+
+clinical <- clinical.BCRtab.all$clinical_patient_brca[-c(1,2),]
+colnames(clinical)[ colnames(clinical) == "bcr_patient_barcode" ] <- "Tumor_Sample_Barcode"
+
+maf_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+#Claude code
+setwd("~/490_cluster/analysis_data")
+options(timeout = 600)
+GDCdownload(maf_query, files.per.chunk = 50)
+maf <- GDCprepare(maf_query)
+
+maf_object <- read.maf(maf = maf,
+                        clinicalData = clinical, # <- this is where our clinical data goes
+                        isTCGA = TRUE)
+saveRDS(maf_object, file = "demo_maf_object.rds")
+maf_object = readRDS("demo_maf_object.rds")
+# make mask
+young_mask = ifelse(maf_object@clinical.data$age_at_diagnosis < 55, T, F)
+# extract barcodes
+young_barcodes = maf_object@clinical.data$Tumor_Sample_Barcode[young_mask]
+old_barcodes = maf_object@clinical.data$Tumor_Sample_Barcode[!young_mask]
+# use barcodes to subset/split object
+young_object = subsetMaf(maf = maf_object,
+tsb = young_barcodes)
+
+old_object = subsetMaf(maf = maf_object,
+tsb = old_barcodes)
+
+oncoplot(maf = maf_object,
+top = 7)
+
+# maf survival plot
+# much like a Kaplan Meier plot, but event is usually death.
+# for the maf survival plot, the event (ie dead/alive) must be a boolean.
+# so, below we make a copy of the original object (called my_maf and add a column that converts the
+# string based vital status ("Alive" and "Dead") into a boolean column):
+# copy object for safety
+my_maf = maf_object
+# add boolean column from string based vital status column
+my_maf@clinical.data$vital_status_bool = ifelse(my_maf@clinical.data$vital_status == "Alive", T, F)
+# "Status" arguement for mafSurvival must be a boolean!
+# looking at TP53 gene as an example
+mafSurvival(maf = my_maf,
+genes = "TP53",
+time = "last_contact_days_to",
+Status = "vital_status_bool")
+
+# contingency table / fisher's exact test
+# mutation status = rows = factor1
+# young/old = cols = factor2
+# young = T, old = F
+## select a gene to look at (ie. whether or not it was mutated)
+# select for PTEN mutation positive cases
+PTEN_maf = subsetMaf(maf = maf_object,
+genes = "PTEN")
+
+# use PTEN_maf to label patients by whether or not they have a mutation
+mutation_status = ifelse(maf_object@clinical.data$Tumor_Sample_Barcode %in% PTEN_maf@clinical.data$Tumor_Sample_Barcode,
+"mutation", "no_mutation")
+# create contingency table with table() function (input factor1, then factor2)
+# the first entry becomes the rows, the second becomes the columns
+contingency_table = table(mutation_status, young_mask)
+# young_mask
+# mutation_status FALSE TRUE
+# mutation 37 15
+# no_mutation 532 384
+#
+# entries are alphabetically sorted
+# run the fisher's exact test to see if mutation status and age are correlated:
+fisher.test(contingency_table)
+```
+
+It's useful to save your MAF_object, so that you don't have to go through the trouble of querying and preparing it everytime. The saveRDS function allows us to save an R object, allowing us to access it directly from our files. 
+```{r}
+saveRDS("maf_object", file = "/home1/andyzwu/490_cluster/analysis_data/maf_object.rds")
+# ex. saveRDS(MAF_object, file = "/home1/andyzwu/490_cluster/analysis_data/maf_object.rds")
+```
+
+When you reopen a new R session and want to access your MAF_object, you can use the readRDS function to load the object back into a new variable.
+```{r}
+MAF_object <- readRDS(file = "/home1/andyzwu/490_cluster/analysis_data/maf_object.rds")
+# ex. MAF_object <- readRDS(file = "/home1/andyzwu/490_cluster/analysis_data/maf_object.rds")
+```
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+#I choose radiation_total_dose from clin_rad and then treatment_best_reponse from clin_rad to sort the groups.
+#coded by Claude
+
+#defining terms
+clin_rad <- clinical.BCRtab.all$clinical_radiation_brca
+clin_drug <- clinical.BCRtab.all$clinical_drug_brca
+clin_rad <- clin_rad[-c(1,2), ]
+clin_drug <- clin_drug[-c(1,2), ]
+
+#step 1: radiation_total_dose -> factor (continuous, so I pick a cutoff)
+clin_rad$radiation_total_dose <- suppressWarnings(as.numeric(clin_rad$radiation_total_dose))
+clin_rad <- clin_rad[!is.na(clin_rad$radiation_total_dose), ]   # drops "[Not Available]" etc.
+
+cutoff <- median(clin_rad$radiation_total_dose)
+clin_rad$dose_group <- factor(ifelse(clin_rad$radiation_total_dose < cutoff, "Low Dose", "High Dose"),
+                              levels = c("Low Dose", "High Dose"))
+table(clin_rad$dose_group)   # check both levels have patients
+
+#step 2: split by treatment_best_response
+var  <- "treatment_best_response"
+val1 <- "Complete Response"
+val2 <- "Radiographic Progressive Disease"
+
+ids1 <- unique(clin_rad$bcr_patient_barcode[clin_rad[[var]] == val1])
+ids2 <- unique(clin_rad$bcr_patient_barcode[clin_rad[[var]] == val2])
+ids1 <- ids1[ids1 %in% maf_object@clinical.data$Tumor_Sample_Barcode]
+ids2 <- ids2[ids2 %in% maf_object@clinical.data$Tumor_Sample_Barcode]
+
+group1_maf <- subsetMaf(maf = maf_object, tsb = ids1)
+group2_maf <- subsetMaf(maf = maf_object, tsb = ids2)
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+#coded by Claude
+coOncoplot(m1 = group1_maf, m1Name = "Complete Response",
+           m2 = group2_maf, m2Name = "Stable Disease",
+           genes = unique(c(getGeneSummary(group1_maf)$Hugo_Symbol[1:9],
+                            getGeneSummary(group2_maf)$Hugo_Symbol[1:9])),
+           removeNonMutated = FALSE)
+
+head(getGeneSummary(group1_maf)[, c("Hugo_Symbol", "MutatedSamples")], 10)
+head(getGeneSummary(group2_maf)[, c("Hugo_Symbol", "MutatedSamples")], 10)
+
+gs1 <- getGeneSummary(group1_maf)
+gs1$pct <- round(100 * gs1$MutatedSamples / 148, 1)
+head(gs1[, c("Hugo_Symbol", "MutatedSamples", "pct")], 10)
+
+#I asked Claude to output a table showing the gene difference percentages since they kept getting cropped off on the graph. 
+
+#PIK3CA appears to have the largest discrepancy between the two groups at 31.8%. The gene is used for controlling normal cell growth, division, and survival, and mutations could lead to cancer. A reason for this discrepancy could be in treatment_best_response where cancerous gene mutations were not found again in patients that had optimal responses after survival.
+```
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+mutation_status = ifelse(maf_object@clinical.data$Tumor_Sample_Barcode %in% PTEN_maf@clinical.data$Tumor_Sample_Barcode,
+"mutation", "no_mutation")
+tsb <- maf_object@clinical.data$Tumor_Sample_Barcode
+
+mutation_status <- ifelse(tsb %in% PTEN_maf@clinical.data$Tumor_Sample_Barcode,
+                          "mutation", "no_mutation")
+
+response <- ifelse(tsb %in% ids1, "Complete Response",
+            ifelse(tsb %in% ids2, "Stable Disease", NA))
+
+df <- data.frame(response = factor(response, levels = c("Complete Response", "Stable Disease")),
+                 mutation_status = factor(mutation_status, levels = c("mutation", "no_mutation")))
+df <- df[!is.na(df$response), ]   # keep only the two groups
+
+cont_table <- table(df$response, df$mutation_status)
+cont_table
+
+fisher_res <- fisher.test(cont_table)
+fisher_res
+
+png("mosaic_PTEN.png", width = 800, height = 600)
+mosaicplot(cont_table, main = "PTEN mutation by treatment response",
+           xlab = "Treatment response", ylab = "PTEN status", color = TRUE)
+
+
+# The p value was 0.2535 and the odds ratio was 0.207. This likely meant that the chance of the Radioactive Progressive Disease was more likely than the chance of the Complete Response for PTEN.  
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+lollipopPlot2(m1 = group1_maf, m2 = group2_maf,
+              gene = "PTEN",
+              m1_name = "Complete Response",
+              m2_name = "Radiographic Progressive Disease")
+#I notice that the Complete Response group has more mutations overall across the gene segment analyzed than the Radiogarphic Progressive Disease group. 
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+cd <- maf_object@clinical.data
+
+cd$survival_time <- as.numeric(ifelse(cd$vital_status == "Dead",
+                                      cd$death_days_to,
+                                      cd$last_contact_days_to))
+
+cd$Overall_Survival_Status <- ifelse(cd$vital_status == "Dead", TRUE, FALSE)
+
+cd <- cd[!is.na(cd$survival_time) & cd$survival_time > 0, ]
+maf_object@clinical.data <- cd
+
+mafSurvival(maf = maf_object,
+            genes = "PTEN",
+            time = "survival_time",
+            Status = "Overall_Survival_Status",
+            isTCGA = TRUE)
+
+
+#Though the mutant samples are far less than the wild type samples, the two KM plots appear the same on the graph. Thinking back to the previous graphs, the lower sample sizes meant that new correlations did not really exist between the data points so the KM plot would probably follow a more general trend instead of that of one of the data points. 
+```
